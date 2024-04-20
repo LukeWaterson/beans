@@ -5,7 +5,7 @@ sys.path.insert(0, myPath + '../beans')
 from beansp.burstrain import *
 from beansp.run_model import runmodel
 import numpy as np
-from beansp import Beans
+from beansp import Beans, beans
 from beansp.get_data import get_obs
 import pathlib
 
@@ -33,7 +33,20 @@ def test_run_model():
         )
 
     # bstart0, bstart, fluen, fluene, obs, obs_err, pflux, pfluxe, tobs, st, et = get_obs(ref_ind=1, bc=2.21, obsname=path_to_data_file_obs, burstname=path_to_data_file_bursts, gtiname=path_to_data_file_gti)
-    B = Beans(ref_ind=1, bc=2.21, obsname=path_to_data_file_obs, burstname=path_to_data_file_bursts)#, gtiname=path_to_data_file_gti)
+    B = Beans(corr=None, config_file=None, interp='linear', 
+        fluen=True, alpha=True, numburstssim=3, ref_ind=1, bc=2.21,
+        obsname=path_to_data_file_obs, burstname=path_to_data_file_bursts,# gtiname=path_to_data_file_gti)
+        test_model=False)
+
+    Bs = Beans(corr=None, config_file=None, interp='spline', 
+        fluen=True, alpha=True, numburstssim=3, ref_ind=1, bc=2.21,
+        obsname=path_to_data_file_obs, burstname=path_to_data_file_bursts,# gtiname=path_to_data_file_gti)
+        test_model=False)
+
+    Bc = Beans(corr=beans.corr_goodwin19, config_file=None, interp='spline', 
+        fluen=True, alpha=True, numburstssim=3, ref_ind=1, bc=2.21,
+        obsname=path_to_data_file_obs, burstname=path_to_data_file_bursts,# gtiname=path_to_data_file_gti)
+        test_model=False)
 
     # updated call to include the train, numburstsobs parameter, and add the
     # full model which is now also output
@@ -44,13 +57,65 @@ def test_run_model():
     # updated here with the new ("physical" parameters), v2.0.0 and later
     # and new mdot-to-flux conversion, v2.2.0 and later
     # and updates to pySettle 1.3.0, removing the 0.65 factor
+    # and updates to the way the time offset is calculated, 2.11.x and later
+    # and the fix to the mdot_Edd function, v2.21.1
 
-    exp = [ 0.14352447,  3.19095919,  5.22764058,    # burst times (d)
-           16.74921135, 16.80522968, 18.85323383, 22.82994974,  # fluences
-           58.40968246, 64.38403223, 70.46527038] # alphas
+    exp = [  0.3371498 ,  3.84590496,  6.76410934,    # burst times (d)
+           17.94856258, 17.35869927, 20.12729269, 27.51898359,  # fluences
+           60.40744506, 66.85451224, 74.21961878] # alphas
 
     result = np.allclose(test, exp, rtol=1e-3)
+    assert result
 
+    # some additional tests with different options
+
+    theta_nosym = theta[:8]
+    test, valid, full_model = runmodel(theta_nosym, B)
+    print ('\nRunning with theta={}\n  result={}'.format(theta_nosym,test))
+
+    # without the systematic errors, should be no difference to the model
+
+    result = np.allclose(test, exp, rtol=1e-3)
+    assert result
+
+    # now with canonical mass and radius
+
+    theta_nomr = theta[:6]
+    test, valid, full_model = runmodel(theta_nomr, B)
+    print ('\nRunning with theta={}\n  result={}'.format(theta_nomr,test))
+
+    # with the canonical mass and radius there are slight differences
+
+    exp_nomr = [ 0.55146657,  3.64700296,  5.89032248,
+                 14.92333594, 14.96612381, 17.06069978, 21.61310762,
+                 62.70263335, 69.5733182 , 76.85360513 ]
+    result = np.allclose(test, exp_nomr, rtol=1e-3)
+    assert result
+
+    # and try the spline interpolation
+
+    test, valid, full_model = runmodel(theta, Bs)
+    print ('\nRunning with spline interpolation, theta={}\n  result={}'.format(theta,test))
+
+    # which gives slight differences again in the predictions
+
+    exp_spline = [ 0.37045536,  3.85703407,  6.82600001, 
+                   16.91872503, 17.25034895, 20.18742875, 27.78212457,
+                   60.04565281, 66.9551983 , 74.37555756 ]
+    result = np.allclose(test, exp_spline, rtol=1e-3)
+    assert result
+
+    # add the correction
+
+    test, valid, full_model = runmodel(theta, Bc)
+    print ('\nRunning with goodwin19 correction, theta={}\n  result={}'.format(theta,test))
+
+    # which gives not-so-slight differences in the predictions
+
+    exp_corr = [ 0.41762404,  3.19702031,  4.48089481,
+                 10.99004728, 11.32612194, 12.51036817, 14.61326653,
+                 60.62210726, 65.20925343, 70.08695522 ]
+    result = np.allclose(test, exp_corr, rtol=1e-3)
     assert result
 
     return

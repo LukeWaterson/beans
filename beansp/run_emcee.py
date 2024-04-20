@@ -36,7 +36,7 @@ def set_initial_positions(theta, nwalkers, prior, scale=1e-4):
 
 
 def runemcee(nwalkers, nsteps, theta, lnprob, prior, x, y, yerr, run_id,
-    restart, threads, **kwargs):
+    restart, threads, stretch_a, pos=None, **kwargs):
     """
     Function to initilise and run emcee.
     Removed the redundant parameter ndim, which can be determined from the
@@ -44,8 +44,8 @@ def runemcee(nwalkers, nsteps, theta, lnprob, prior, x, y, yerr, run_id,
 
     :param nwalkers: number of walkers for the emcee run
     :param nsteps: number of MCMC steps to run
-    :param theta: model parameter tuple, with X, Z, Q_b, f_a, f_E, r1, r2, r3,
-      mass & radius
+    :param theta_in: parameter tuple, with *X*, *Z*, *Q_b*, *d*, *xi_b*,
+      *xi_p*, and (optionally) *mass*, *radius*, *f_E* & *f_a*
     :param lnprob: log-probability function to use with emcee
     :param prior: prior function to use with emcee, used to check the initial walker positions
     :param x: the "independent" variable, passed to lnlike
@@ -56,13 +56,14 @@ def runemcee(nwalkers, nsteps, theta, lnprob, prior, x, y, yerr, run_id,
     :param restart: set to True to continue a previously interrupted run
     :param threads: number of threads for emcee to use (e.g. number of
       cores your computer has). Set to None to use all available
+    :param stretch_a: the Goodman & Weare (2010) stretch move scale parameter
     """
 
     ndim = len(theta)
 
     # This section now defines the initial walker positions and next defines the chain and runs emcee.
 
-    print("# -------------------------------------------------------------------------#")
+    print("\n# ---------------------------------------------------------------------------#")
 
     # define the dtype of the blobs
     # this refers to the 2nd and subsequent parameters returned by lnprob;
@@ -77,23 +78,26 @@ def runemcee(nwalkers, nsteps, theta, lnprob, prior, x, y, yerr, run_id,
 
     if restart == True:
         steps_so_far = np.shape(reader.get_chain())[0]
-        print('Restarting',run_id,'with',nwalkers,'walkers after',steps_so_far,'steps done')
+	# logic here is, that if nsteps > steps_so_far, then you're
+	# restarting to try to complete the original nsteps target
+        if nsteps-steps_so_far > 0:
+            print('    Continuing run={} with {} walkers from {}/{} steps...'.format(run_id,nwalkers,steps_so_far,nsteps))
+            nsteps -= steps_so_far
+        else:
+            print('    Extending run={} with {} walkers after {} steps done...'.format(run_id,nwalkers,steps_so_far))
     else:
         reader.reset(nwalkers, ndim)
-        # set the intial position of the walkers
-        # pos = [theta + 1e-4*np.random.randn(ndim) for i in range(nwalkers)]
-        pos = set_initial_positions(theta,  nwalkers, prior)
 
-        print('Ready to run',run_id,'with',nwalkers,'walkers')
-            
-    print("Beginning sampling..")
-   
-    # try the multiprocessing (again) following the simple example here:
+        print('    Running run={} with {} walkers, target {} steps...'.format(run_id,nwalkers,nsteps))
+
+    # implement multiprocessing following the simple example here:
     # https://emcee.readthedocs.io/en/stable/tutorials/parallel
     with Pool(processes=threads) as pool:
 
-        sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprob, args=(x, y, yerr), backend=reader, blobs_dtype=dtype, pool=pool )
-        #moves=emcee.moves.StretchMove(a=1.5))
+        sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprob,
+            args=(x, y, yerr), backend=reader, blobs_dtype=dtype, pool=pool,
+            moves=emcee.moves.StretchMove(a=stretch_a),
+            **kwargs)
     
         # We'll track how the average autocorrelation time estimate changes
         index = 0
@@ -106,11 +110,21 @@ def runemcee(nwalkers, nsteps, theta, lnprob, prior, x, y, yerr, run_id,
 	# options, but the only difference was the choice of the starting
 	# positions, so have now merged them
 
-        if restart == True:
+        if pos is not None:
+            # warning is probably not necessary since we've already vetted
+            # the positions in beans.do_run
+            print ('\n    ** WARNING ** setting walkers at provided position vector')
+        elif restart == True:
             pos = sampler.get_last_sample()
+        else:
+            # set the intial position of the walkers
+            # pos = [theta + 1e-4*np.random.randn(ndim) for i in range(nwalkers)]
+            pos = set_initial_positions(theta,  nwalkers, prior)
 
-        for sample in sampler.sample(pos, iterations=nsteps, progress=True,
-            **kwargs):
+        print("# ---------------------------------------------------------------------------#")
+            
+        for sample in sampler.sample(pos, iterations=nsteps, progress=True):
+
             # Only check convergence every 100 steps
             if sampler.iteration % 100:
                 continue

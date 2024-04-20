@@ -4,15 +4,16 @@ import numpy as np
 # load local module
 from .burstrain import *
 
-def burst_time_match(iref, time1, time2):
+def burst_time_match(iref1, time1, iref2, time2):
     """
     Function to generate an array of indices of elements in time2 that are
     closest (overall) to the elements of time1. One of the elements of
-    time1 (index iref) is chosen as a "reference" that should be
-    replicated exactly in time2
+    time1 (index iref1) is chosen as a "reference" that should be
+    replicated exactly in time2 (index iref2)
 
-    :param iref: index of "reference" time in array time1
+    :param iref1: index of "reference" time in array time1
     :param time1: times to match. In run_model, this is the observed burst times
+    :param iref2: index of "reference" time in array time2
     :param time2: times to be matched; i.e. the predicted burst times
 
     :return: list of indices having same length as time1
@@ -53,16 +54,28 @@ def burst_time_match(iref, time1, time2):
 
         return ix
 
-    ref_tpred = np.argmin(np.abs(time2 - time1[iref]))
+    assert np.isclose(time1[iref1],time2[iref2],rtol=1e-4)
+
+    # special here for IGR J17511-3057, forcing the match solution
+    # this for continuing the base20 run
+    # ioff = [-17, -16, -13, -11,  -6,  -5,  -3,  -2,  -1,   0,   3,   4,   5,
+    #      7,   9,  11,  12,  14,  15,  19]
+    # & for IGR J17498-2921, for the forcepm9 run
+    # ioff = [-9, -5, -2, -1,  0,  1,  8,  9]
+    # if (iref2+ioff[0] >= 0) & (len(time2) > iref2+ioff[-1]):
+    #     return [iref2+x for x in ioff]
+    # else:
+    #     return None
+
     # make sure we have enough bursts to match, on either side of the
     # reference
-    if ((ref_tpred < iref) | (len(time2)-ref_tpred-1 < len(time1)-iref-1)):
+    if ((iref2 < iref1) | (len(time2)-iref2-1 < len(time1)-iref1-1)):
         return None
 
-    ix = [ref_tpred]
-    ix = match_left(ix, iref, time1, time2)
+    ix = [iref2]
+    ix = match_left(ix, iref1, time1, time2)
 
-    ix = match_right(ix, iref, time1, time2)
+    ix = match_right(ix, iref1, time1, time2)
 
     if len(ix) < len(time1):
         return None
@@ -76,7 +89,7 @@ def burst_time_match(iref, time1, time2):
     # print (ix, np.sum(np.abs(time1-time2[ix])))
 
     _i = 0
-    while _i < iref-1:
+    while _i < iref1-1:
         # print (_i, ix[_i+1]-ix[_i], ix[_i+2]-ix[_i+1])
         if (ix[_i+1]-ix[_i] == 1) & (ix[_i+2]-ix[_i+1] > 1):
             ix_try = match_left(ix[_i+2:], _i+2, time1, time2, first=ix[_i+1]+1)
@@ -89,7 +102,7 @@ def burst_time_match(iref, time1, time2):
     # print ('after leftward refinement: ',ix)
 
     _i = len(ix)-1
-    while _i > iref+1:
+    while _i > iref1+1:
         # print (_i, ix[_i]-ix[_i-1], ix[_i-1]-ix[_i-2], ix[:_i-1])
         if (ix[_i]-ix[_i-1] == 1) & (ix[_i-1]-ix[_i-2] > 1):
             ix_try = match_right(ix[:_i-1], _i-2, time1, time2, first=ix[_i-1]-1)
@@ -112,8 +125,8 @@ def runmodel(theta_in, bean, match=True, debug=False):
     It then assembles the predictions from the model into a form that can
     be compared to the observations (with appropriate scaling)
 
-    :param theta_in: parameter tuple: X, Z, Q_b, dist, xi_b, xi_p, mass,
-      radius, and (optionally) f_a & f_E
+    :param theta_in: parameter vector, with *X*, *Z*, *Q_b*, *d*, *xi_b*,
+      *xi_p*, and (optionally) *mass*, *radius*, *f_E* & *f_a*
     :param bean: Beans object, from which the required parameters are drawn:
       y, tref, bstart, pflux, pfluxe, tobs, numburstssim, numburstsobs,
       ref_ind, gti_checking,train, gti_start=None, gti_end=None,
@@ -128,7 +141,8 @@ def runmodel(theta_in, bean, match=True, debug=False):
     if debug:
         print('Calling runmodel')
 
-    X, Z, Q_b, dist, xi_b, xi_p, mass, radius = theta_in[:8]
+    X, Z, Q_b, dist, xi_b, xi_p, *extra = theta_in
+    mass, radius, f_E, f_a = extra+[bean.M_NS, bean.R_NS, 1.0, 1.0][len(extra):]
 
     # by default we assume the model is valid, i.e. has sufficient bursts
     # to match the observations, AND doesn't violate the GTI conditions
@@ -150,7 +164,7 @@ def runmodel(theta_in, bean, match=True, debug=False):
         # insufficiently strict) criterion is to at least simulate as many
         # bursts as are observed.
 
-        tpred = np.array(result["time"])
+        tpred = result["time"]
         npred = len(tpred)
         if npred < bean.numburstsobs:
             if debug:
@@ -172,10 +186,9 @@ def runmodel(theta_in, bean, match=True, debug=False):
     # The times are already relative to the reference bursts, so
     # nothing needs to be done to those
 
-    result['fluen'] = list( np.array(result['e_b']) 
-        * (bean.fluen_fac/xi_b/dist**2).value )
+    result['fluen'] = result['e_b'] * (bean.fluen_fac/xi_b/dist**2).value
 
-    result['alpha_obs'] = list(np.array(result['alpha']) * xi_b/xi_p )
+    result['alpha_obs'] = result['alpha'] * xi_b/xi_p
 
     # And finally form the model array for comparison with the data
 
@@ -191,7 +204,7 @@ def runmodel(theta_in, bean, match=True, debug=False):
         # First need to match the burst times; this is surprisingly
         # difficult to do robustly.
 
-        imatch = burst_time_match(bean.ref_ind, bean.bstart, tpred)
+        imatch = burst_time_match(bean.ref_ind, bean.bstart, result['iref'], tpred)
 
         if imatch is None:
             return None, False, result
@@ -211,7 +224,7 @@ def runmodel(theta_in, bean, match=True, debug=False):
 
             # We only compare the times of the bursts for the events excluding
             # the reference burst, from which the train is calculated
-            itime = list(imatch.copy())
+            itime = imatch.copy()
             itime.pop(bean.ref_ind)
 
             # We compare the fluences for all the bursts
@@ -225,12 +238,11 @@ def runmodel(theta_in, bean, match=True, debug=False):
             ialpha.pop(0)
 
             # Now assemble the whole array for comparison with the measurements
-            # this would be simpler if the result elements were numpy arrays
-            # and not lists!
+            # Includes the selection of non-zero fluences (set in get_obs)
 
-            model =  np.concatenate((np.array(result['time'])[itime],
-                np.array(result['fluen'])[ie_b],
-                np.array(result['alpha_obs'])[ialpha]))
+            model =  np.concatenate((result['time'][itime],
+                result['fluen'][ie_b][bean.ifluen],
+                result['alpha_obs'][ialpha][bean.ifluen[1:]-1]))
 
     # Check here if the model instance is valid, i.e. the bursts that are NOT
     # matched with the observed ones must fall in gaps
@@ -238,19 +250,22 @@ def runmodel(theta_in, bean, match=True, debug=False):
     # avoid copying them over from IDL each time; but now these are stored
     # with the Beans object
 
-    if bean.gti_checking:
+    if match & (model is not None) & bean.gti_checking:
         # if "st" not in globals():
         if (bean.st is None) or (bean.et is None):
             print ('** WARNING ** can''t access GTI information')
             return model, valid, result
 
+        # this is *very* inefficient, but might be the simplest option,
+        # particularly if we have overlapping GTIs
         for index, rt in enumerate(tpred):
             if index not in imatch:
                 # ok, not one of the known bursts. Is it an excluded time?#
                 for i in range(len(bean.st)):
 
-                    if rt >= bean.st[i] and rt <= bean.et[i] - 10.0 / 86400.0:
+                    if (rt >= bean.st[i]) and (rt <= bean.et[i] - 10.0 / 86400.0):
 
+                        # print (rt, i, bean.st[i], bean.et[i])
                         return model, False, result
 
     # Check here if anisoptropy estimates are consistent with Fujimoto model
